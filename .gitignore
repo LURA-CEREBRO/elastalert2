@@ -20,3 +20,4 @@ my_rules
 /rules/
 /chart/elastalert2/real_values.yaml
 mod/
+/config/

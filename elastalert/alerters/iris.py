@@ -1,7 +1,7 @@
-import requests
 import uuid
-
 from datetime import datetime
+
+import requests
 from requests import RequestException
 
 from elastalert.alerts import Alerter
@@ -49,6 +49,27 @@ class IrisAlerter(Alerter):
 
         return field_value
 
+    def format_string_with_match(self, template_string, matches):
+        """Format a template string with match data using the same logic as alert_subject"""
+        if template_string is None:
+            return None
+            
+        # Handle {0[field.name]} format used in alert_subject
+        import re
+        pattern = r'\{0\[([^\]]+)\]\}'
+        
+        def replace_field(match):
+            field_name = match.group(1)
+            field_value = lookup_es_key(matches[0], field_name)
+            if field_value is not None:
+                # If it's a list/array, join with commas
+                if isinstance(field_value, list):
+                    return ", ".join(str(item) for item in field_value)
+                return str(field_value)
+            return f"<MISSING: {field_name}>"
+        
+        return re.sub(pattern, replace_field, str(template_string))
+
     def make_alert_context_records(self, matches):
         alert_context = {}
 
@@ -78,23 +99,37 @@ class IrisAlerter(Alerter):
         else:
             event_timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         
+        # Process custom fields with match data formatting
+        formatted_description = self.format_string_with_match(self.description, matches)
+        formatted_alert_note = self.format_string_with_match(self.alert_note, matches)
+        formatted_alert_tags = self.format_string_with_match(self.alert_tags, matches)
+        
+        # Debug: Log the formatted tags
+        elastalert_logger.info(f"IRIS Alert Tags: {formatted_alert_tags}")
+        
+        # Get the formatted title - apply our custom formatting directly
+        alert_title = self.create_title(matches)
+        # If the title still contains the template, format it manually
+        if "{0[" in str(alert_title):
+            alert_title = self.format_string_with_match(alert_title, matches)
+        
         alert_data = {
-            "alert_title": self.create_title(matches),
-            "alert_description": self.description,
+            "alert_title": alert_title,
+            "alert_description": formatted_description,
             "alert_source": self.alert_source,
             "alert_severity_id": self.alert_severity_id,
             "alert_status_id": self.alert_status_id,
             "alert_source_event_time": event_timestamp,
-            "alert_note": self.alert_note,
-            "alert_tags": self.alert_tags,
+            "alert_note": formatted_alert_note,
+            "alert_tags": formatted_alert_tags,
             "alert_customer_id": self.customer_id,
         }
 
-        # If there is an exisiting description, it will populate in alert_data otherwise update the alert_data with the create_alert_body data.
+        # If there is an existing description, it will populate in alert_data otherwise update the alert_data with the create_alert_body data.
         if not self.description:
             alert_data.update(
                 {"alert_description": self.create_alert_body(matches)}
-            ) 
+            )
 
         if self.alert_source_link:
             alert_data.update(
